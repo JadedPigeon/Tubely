@@ -2,6 +2,7 @@ package main
 
 // streak
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -64,16 +65,24 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	videoThumbnails[videoID] = thumbnail{
-		data:      thumbnailData,
-		mediaType: mediaType,
-	}
+	// Storing the thumbnail in memory
+	// videoThumbnails[videoID] = thumbnail{
+	// 	data:      thumbnailData,
+	// 	mediaType: mediaType,
+	// }
 
-	url := "http://localhost:8091/api/thumbnails/" + videoIDString
-	metadata.ThumbnailURL = &url
+	encodedThumbnail := base64.StdEncoding.EncodeToString(thumbnailData)
+
+	// Create a data URL with the media type and base64 encoded image data. The format is: data:<media-type>;base64,<data>
+	dataURL := "data:" + mediaType + ";base64," + encodedThumbnail
+
+	// This url was for the in memory appraoch
+	// url := "http://localhost:8091/api/thumbnails/" + videoIDString
+
+	metadata.ThumbnailURL = &dataURL
 
 	//print the thumbnail
-	fmt.Printf("Thumbnail uploaded for video %s by user %s, URL: %s\n", videoID, userID, url)
+	fmt.Printf("Thumbnail uploaded for video %s by user %s, URL: %s\n", videoID, userID, dataURL)
 
 	err = cfg.db.UpdateVideo(metadata)
 	if err != nil {
