@@ -2,10 +2,11 @@ package main
 
 // streak
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -43,15 +44,29 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	defer multipartfile.Close()
 
-	mediaType := multipartheader.Header.Get("Content-Type")
-	if mediaType == "" {
+	mediaTypeHeader := multipartheader.Header.Get("Content-Type")
+	if mediaTypeHeader == "" {
 		respondWithError(w, http.StatusBadRequest, "Missing media type", nil)
 		return
 	}
-	thumbnailData, err := io.ReadAll(multipartfile)
+	mediaType, _, err := mime.ParseMediaType(mediaTypeHeader)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to read thumbnail data", err)
+		respondWithError(w, http.StatusBadRequest, "Invalid media type", err)
 		return
+	}
+
+	// Only allow image/jpeg and image/png
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "Only JPEG and PNG thumbnails are allowed", nil)
+		return
+	}
+
+	exts, _ := mime.ExtensionsByType(mediaType)
+	ext := ""
+	if len(exts) > 0 {
+		ext = exts[0]
+	} else {
+		ext = ".png" // fallback
 	}
 
 	metadata, err := cfg.db.GetVideo(videoID)
@@ -65,24 +80,26 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Storing the thumbnail in memory
-	// videoThumbnails[videoID] = thumbnail{
-	// 	data:      thumbnailData,
-	// 	mediaType: mediaType,
-	// }
+	// Use the videoID to create a unique file path. filepath.Join and cfg.assetsRoot will be helpful here
+	filepath := "assets/" + videoIDString + ext
+	systemfile, err := os.Create(filepath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to create system file for thumbnail", err)
+	}
+	defer systemfile.Close()
 
-	encodedThumbnail := base64.StdEncoding.EncodeToString(thumbnailData)
+	_, err = io.Copy(systemfile, multipartfile)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to write thumbnail to file", err)
+		return
+	}
 
-	// Create a data URL with the media type and base64 encoded image data. The format is: data:<media-type>;base64,<data>
-	dataURL := "data:" + mediaType + ";base64," + encodedThumbnail
+	fileURL := "http://localhost:8091/assets/" + videoIDString + ext
 
-	// This url was for the in memory appraoch
-	// url := "http://localhost:8091/api/thumbnails/" + videoIDString
-
-	metadata.ThumbnailURL = &dataURL
+	metadata.ThumbnailURL = &fileURL
 
 	//print the thumbnail
-	fmt.Printf("Thumbnail uploaded for video %s by user %s, URL: %s\n", videoID, userID, dataURL)
+	fmt.Printf("Thumbnail uploaded for video %s by user %s, URL: is too long", videoID, userID)
 
 	err = cfg.db.UpdateVideo(metadata)
 	if err != nil {
