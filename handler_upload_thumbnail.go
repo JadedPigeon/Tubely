@@ -60,7 +60,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusBadRequest, "Only JPEG and PNG thumbnails are allowed", nil)
 		return
 	}
-	//I won't comment again
 
 	exts, _ := mime.ExtensionsByType(mediaType)
 	ext := ""
