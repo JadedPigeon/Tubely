@@ -2,6 +2,8 @@ package main
 
 // streak
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
@@ -80,8 +82,15 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Use the videoID to create a unique file path. filepath.Join and cfg.assetsRoot will be helpful here
-	filepath := "assets/" + videoIDString + ext
+	randomBytes := make([]byte, 32)
+	_, err = rand.Read(randomBytes)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to generate random filename", err)
+		return
+	}
+	randomName := base64.RawURLEncoding.EncodeToString(randomBytes)
+
+	filepath := "assets/" + randomName + ext
 	systemfile, err := os.Create(filepath)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to create system file for thumbnail", err)
@@ -94,7 +103,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	fileURL := "http://localhost:8091/assets/" + videoIDString + ext
+	fileURL := "http://localhost:8091/assets/" + randomName + ext
 
 	metadata.ThumbnailURL = &fileURL
 
