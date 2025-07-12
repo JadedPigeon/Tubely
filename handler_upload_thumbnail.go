@@ -81,7 +81,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusForbidden, "You do not have permission to upload a thumbnail for this video", nil)
 		return
 	}
-	//comment
+
 	randomBytes := make([]byte, 32)
 	_, err = rand.Read(randomBytes)
 	if err != nil {
