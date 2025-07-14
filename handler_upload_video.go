@@ -1,20 +1,30 @@
 package main
 
 import (
-	"context"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
 )
+
+type ffprobeStreams struct {
+	Streams []struct {
+		Width  int `json:"width"`
+		Height int `json:"height"`
+	} `json:"streams"`
+}
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
 	videoIDString := r.PathValue("videoID")
@@ -95,6 +105,22 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Determine the aspect ratio of the video
+	aspectRatio, err := getVideoAspectRatio(videoFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to determine video aspect ratio", err)
+		return
+	}
+	var prefix string
+	switch aspectRatio {
+	case "16:9":
+		prefix = "landscape"
+	case "9:16":
+		prefix = "portrait"
+	default:
+		prefix = "other"
+	}
+
 	// Generate a random 32-byte hex string for the S3 key
 	randomBytes := make([]byte, 32)
 	_, err = rand.Read(randomBytes)
@@ -103,9 +129,9 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	randomHex := hex.EncodeToString(randomBytes)
-	s3Key := fmt.Sprintf("%s.mp4", randomHex)
+	s3Key := fmt.Sprintf("%s/%s.mp4", prefix, randomHex)
 
-	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         aws.String(s3Key),
 		Body:        videoFile,
@@ -124,4 +150,50 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, map[string]string{"url": *metadata.VideoURL})
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	arguments := "-v error -print_format json -show_streams " + filePath
+	cmd := exec.Command("ffprobe", strings.Split(arguments, " ")...)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+
+	var probe ffprobeStreams
+	err = json.Unmarshal(output.Bytes(), &probe)
+	if err != nil {
+		return "", err
+	}
+	// determine the ratio, then returned one of three strings: 16:9, 9:16, or other
+	if len(probe.Streams) == 0 || probe.Streams[0].Height == 0 {
+		return "", fmt.Errorf("no video stream with width and height found")
+	}
+
+	const tolerance = 0.01
+
+	for _, stream := range probe.Streams {
+		if stream.Width > 0 && stream.Height > 0 {
+			w := float64(stream.Width)
+			h := float64(stream.Height)
+			ratio := w / h
+			if abs(ratio-16.0/9.0) < tolerance {
+				return "16:9", nil
+			}
+			if abs(ratio-9.0/16.0) < tolerance {
+				return "9:16", nil
+			}
+			return "other", nil
+		}
+	}
+	return "", fmt.Errorf("no video stream with width and height found")
+}
+
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
