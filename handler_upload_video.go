@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -12,10 +13,12 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
+	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 )
 
@@ -99,6 +102,20 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Process the video for fast start
+	videoFilePath, err := processVideoForFastStart(videoFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to process video for fast start", err)
+		return
+	}
+	videoFile, err = os.Open(videoFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to open processed video file", err)
+		return
+	}
+	defer os.Remove(videoFile.Name())
+	defer videoFile.Close()
+
 	_, err = videoFile.Seek(0, io.SeekStart)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to seek in video file", err)
@@ -142,14 +159,20 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	metadata.VideoURL = aws.String(fmt.Sprintf("https://%s.s3.amazonaws.com/%s", cfg.s3Bucket, s3Key))
+	metadata.VideoURL = aws.String(fmt.Sprintf("%s,%s", cfg.s3Bucket, s3Key))
 	err = cfg.db.UpdateVideo(metadata)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to update video metadata", err)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, map[string]string{"url": *metadata.VideoURL})
+	signedURL, err := cfg.dbVideoToSignedVideo(metadata)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to generate signed video URL", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, map[string]string{"url": *signedURL.VideoURL})
 }
 
 func getVideoAspectRatio(filePath string) (string, error) {
@@ -196,4 +219,49 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+	newPath := filePath + ".processing"
+	cmd := exec.Command(
+		"ffmpeg",
+		"-i", filePath,
+		"-movflags", "faststart",
+		"-c", "copy",
+		"-f", "mp4",
+		newPath,
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("ffmpeg error: %v, details: %s", err, stderr.String())
+	}
+	return newPath, nil
+}
+
+func generatePresignedURL(s3Client *s3.Client, bucket, key string, expireTime time.Duration) (string, error) {
+	pClient := s3.NewPresignClient(s3Client)
+	resp, err := pClient.PresignGetObject(context.TODO(), &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(expireTime))
+	if err != nil {
+		return "", err
+	}
+	return resp.URL, nil
+}
+
+func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
+	// Get the S3 bucket and key from the video URL which is stored as a CSV of bucket and key
+	parts := strings.Split(*video.VideoURL, ",")
+	if len(parts) < 2 {
+		return database.Video{}, fmt.Errorf("invalid VideoURL format: expected 'bucket,key', got %v", parts)
+	}
+	new_url, err := generatePresignedURL(cfg.s3Client, parts[0], parts[1], 15*time.Minute)
+	if err != nil {
+		return database.Video{}, fmt.Errorf("unable to generate presigned URL: %w", err)
+	}
+	video.VideoURL = aws.String(new_url)
+	return video, nil
 }
