@@ -31,6 +31,8 @@ type ffprobeStreams struct {
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
 	videoIDString := r.PathValue("videoID")
+	fmt.Println("Request URL:", r.URL.Path)
+	fmt.Println("videoIDString:", videoIDString)
 	videoID, err := uuid.Parse(videoIDString)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Invalid ID", err)
@@ -82,6 +84,9 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Unable to get video metadata", err)
 		return
 	}
+
+	fmt.Println("metadata.UserID:", metadata.UserID)
+	fmt.Println("userID:", userID)
 
 	if metadata.UserID != userID {
 		respondWithError(w, http.StatusForbidden, "You do not have permission to upload a video for this video", nil)
@@ -172,7 +177,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, map[string]string{"url": *signedURL.VideoURL})
+	respondWithJSON(w, http.StatusOK, signedURL)
 }
 
 func getVideoAspectRatio(filePath string) (string, error) {
@@ -253,7 +258,9 @@ func generatePresignedURL(s3Client *s3.Client, bucket, key string, expireTime ti
 }
 
 func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
-	// Get the S3 bucket and key from the video URL which is stored as a CSV of bucket and key
+	if video.VideoURL == nil || *video.VideoURL == "" {
+		return video, nil
+	}
 	parts := strings.Split(*video.VideoURL, ",")
 	if len(parts) < 2 {
 		return database.Video{}, fmt.Errorf("invalid VideoURL format: expected 'bucket,key', got %v", parts)
