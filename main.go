@@ -25,6 +25,7 @@ type apiConfig struct {
 	s3CfDistribution string
 	port             string
 	s3Client         *s3.Client
+	CFD              string
 }
 
 func main() {
@@ -86,6 +87,7 @@ func main() {
 	}
 
 	s3Client := s3.NewFromConfig(awsCfg)
+	CFD := os.Getenv("CFD_DOMAIN")
 
 	cfg := apiConfig{
 		db:               db,
@@ -98,6 +100,7 @@ func main() {
 		s3CfDistribution: s3CfDistribution,
 		port:             port,
 		s3Client:         s3Client,
+		CFD:              CFD,
 	}
 
 	err = cfg.ensureAssetsDir()
